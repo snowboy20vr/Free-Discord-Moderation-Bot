@@ -35,3 +35,7 @@ A free, self-hostable Discord moderation bot built with discord.py. It combines 
 The server owner, configured owner IDs and Discord Administrators are always treated as level 5. Other users receive levels through configured roles using /setrolelevel.
 
 The custom permission system does not replace Discord permissions. A user must pass both the custom level and the underlying Discord permission required for an action.
+
+
+## Planned settings
+The configuration dashboard includes server-wide punishment and logging settings.
