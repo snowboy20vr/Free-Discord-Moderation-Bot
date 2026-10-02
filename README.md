@@ -229,3 +229,6 @@ Temporary bans are stored in SQLite so the bot can still process the expiration 
 5. Set ban and softban message deletion.
 6. Open **Server** and set your prefix and moderation log channel.
 7. Test **/level**, **/warn**, and **/config** before giving staff access.
+
+
+> **Permission hierarchy correction:** Level 1 is the highest (Owner / Full Control), followed by Level 2 Administrator, Level 3 Senior Moderator, Level 4 Moderator, and Level 5 Trial Moderator. Lower number means more power.
