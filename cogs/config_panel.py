@@ -89,6 +89,27 @@ class ConfigTab(discord.ui.Button):
         self.parent_view.rebuild()
         await interaction.response.edit_message(view=self.parent_view)
 
+class SettingsToggle(discord.ui.Button):
+    def __init__(self, parent, key, label, enabled):
+        self.parent = parent
+        self.key = key
+        super().__init__(
+            label=f'{label}: {"ON" if enabled else "OFF"}',
+            style=discord.ButtonStyle.success if enabled else discord.ButtonStyle.secondary,
+            custom_id=f'config_setting_{key}',
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+        settings = self.parent.bot.db.settings(self.parent.guild.id)
+        self.parent.bot.db.set_setting(
+            self.parent.guild.id,
+            self.key,
+            0 if settings.get(self.key, 0) else 1,
+        )
+        self.parent.rebuild()
+        await interaction.response.edit_message(view=self.parent)
+
+
 class ConfigView(discord.ui.LayoutView):
     def __init__(self, bot, guild, author):
         super().__init__(timeout=300)
