@@ -110,6 +110,37 @@ class SettingsToggle(discord.ui.Button):
         await interaction.response.edit_message(view=self.parent)
 
 
+class DeleteDaysSelect(discord.ui.Select):
+    def __init__(self, parent, key, placeholder):
+        self.parent = parent
+        self.key = key
+        current = int(parent.bot.db.settings(parent.guild.id).get(key, 1))
+        super().__init__(
+            placeholder=placeholder,
+            min_values=1,
+            max_values=1,
+            options=[
+                discord.SelectOption(
+                    label=f'{days} day' + ('' if days == 1 else 's'),
+                    description='Do not delete recent messages' if days == 0 else f'Delete the last {days} day(s)',
+                    value=str(days),
+                    default=days == current,
+                )
+                for days in range(8)
+            ],
+            custom_id=f'config_setting_select_{key}',
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+        self.parent.bot.db.set_setting(
+            self.parent.guild.id,
+            self.key,
+            int(self.values[0]),
+        )
+        self.parent.rebuild()
+        await interaction.response.edit_message(view=self.parent)
+
+
 class ConfigView(discord.ui.LayoutView):
     def __init__(self, bot, guild, author):
         super().__init__(timeout=300)
