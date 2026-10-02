@@ -70,10 +70,14 @@ class General(commands.Cog):
     @commands.hybrid_command(name='level', description='Show your effective moderation level.')
     async def level(self, ctx, member: discord.Member | None = None):
         member = member or ctx.author
-        level = 5 if member.guild_permissions.administrator or member.guild.owner_id == member.id else 0
-        if level < 5:
-            level = max((self.bot.db.role_levels(ctx.guild.id).get(r.id, 0) for r in member.roles), default=0)
-        await ctx.send(f'🛡️ {member.mention} has permission level **{level} — {LEVEL_NAMES.get(level, "No configured level")}**.')
+        if member.guild.owner_id == member.id:
+            level = 1
+        elif member.guild_permissions.administrator:
+            level = 2
+        else:
+            configured = [self.bot.db.role_levels(ctx.guild.id).get(r.id) for r in member.roles if self.bot.db.role_levels(ctx.guild.id).get(r.id) is not None]
+            level = min(configured) if configured else 5
+        await ctx.send(f'🛡️ {member.mention} has permission level **{level} — {LEVEL_NAMES[level]}**.')
 
 async def setup(bot):
     await bot.add_cog(General(bot))
