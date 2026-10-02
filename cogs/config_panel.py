@@ -82,7 +82,7 @@ class ConfigTab(discord.ui.Button):
     def __init__(self, parent_view, tab, label, emoji):
         self.parent_view = parent_view
         self.tab = tab
-        super().__init__(label=label, emoji=emoji, style=discord.ButtonStyle.secondary, custom_id=f'config_tab_{tab}')
+        super().__init__(label=label, emoji=emoji, style=discord.ButtonStyle.primary if parent_view.tab == tab else discord.ButtonStyle.secondary, disabled=parent_view.tab == tab, custom_id=f'config_tab_{tab}')
 
     async def callback(self, interaction: discord.Interaction):
         self.parent_view.tab = self.tab
@@ -197,11 +197,11 @@ class ConfigView(discord.ui.LayoutView):
                 f'## Command Permissions\n'
                 f'Selected: /{selected}\n'
                 f'Required level: {level}\n\n'
-                '1 • Trial Moderator\n'
-                '2 • Moderator\n'
+                '1 • Owner / Full Control\n'
+                '2 • Administrator\n'
                 '3 • Senior Moderator\n'
-                '4 • Administrator\n'
-                '5 • Owner'
+                '4 • Moderator\n'
+                '5 • Trial Moderator'
             ))
             page_row = discord.ui.ActionRow()
             page_row.add_item(CommandPageSelect(self))
