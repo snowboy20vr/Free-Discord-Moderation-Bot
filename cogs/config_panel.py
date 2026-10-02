@@ -225,6 +225,12 @@ class ConfigView(discord.ui.LayoutView):
             settings_row.add_item(SettingsToggle(self, 'require_reason', 'Require Reasons', bool(settings.get('require_reason', 1))))
             settings_row.add_item(SettingsToggle(self, 'dm_actions', 'Moderation DMs', bool(settings.get('dm_actions', 0))))
             self.add_item(settings_row)
+            ban_row = discord.ui.ActionRow()
+            ban_row.add_item(DeleteDaysSelect(self, 'ban_delete_days', 'Ban message deletion'))
+            self.add_item(ban_row)
+            softban_row = discord.ui.ActionRow()
+            softban_row.add_item(DeleteDaysSelect(self, 'softban_delete_days', 'Softban message deletion'))
+            self.add_item(softban_row)
         elif self.tab == 'server':
             self.add_item(discord.ui.TextDisplay(
                 '## Server Settings\n\n'
