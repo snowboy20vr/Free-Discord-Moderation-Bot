@@ -11,6 +11,8 @@ def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+# Settings and punishment persistence lives in SQLite.
+
 class Database:
     def __init__(self, path: str = DATABASE_PATH):
         self.path = path
