@@ -1,12 +1,12 @@
 from __future__ import annotations
 
 import re
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 import discord
-from discord.ext import commands
+from discord.ext import commands, tasks
 from discord import app_commands
 
-from utils.permissions import can_use, default_level
+from utils.permissions import can_use, default_level, highest_level
 from utils.modlog import send_modlog, dm_action
 
 
@@ -38,13 +38,67 @@ def duration_text(delta: timedelta) -> str:
     return '0 seconds'
 
 
+def split_reason_duration(details: str | None) -> tuple[str, timedelta | None]:
+    details = (details or '').strip()
+    if not details:
+        return '', None
+    parts = details.split()
+    possible = parse_duration(parts[-1])
+    if possible:
+        return ' '.join(parts[:-1]).strip(), possible
+    return details, None
+
+
 def hierarchy_ok(ctx, member: discord.Member) -> bool:
-    return member != ctx.guild.owner and member != ctx.author and member.top_role < ctx.guild.me.top_role
+    if member == ctx.guild.owner or member == ctx.author:
+        return False
+    if ctx.guild.me and member.top_role >= ctx.guild.me.top_role:
+        return False
+    moderator_level = highest_level(ctx.author, ctx.bot.db.role_levels(ctx.guild.id))
+    target_level = highest_level(member, ctx.bot.db.role_levels(ctx.guild.id))
+    return target_level > moderator_level
 
 
 class Moderation(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
+        self.expiration_worker.start()
+
+    def cog_unload(self):
+        self.expiration_worker.cancel()
+
+    @tasks.loop(minutes=1)
+    async def expiration_worker(self):
+        for item in self.bot.db.due_temp_punishments():
+            guild = self.bot.get_guild(int(item['guild_id']))
+            if guild and item['action'] == 'ban':
+                try:
+                    await guild.unban(
+                        discord.Object(int(item['user_id'])),
+                        reason=f"Temporary ban Case #{item['case_id']} expired",
+                    )
+                except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+                    pass
+            self.bot.db.remove_temp_punishment(item['guild_id'], item['user_id'], item['action'])
+
+    @expiration_worker.before_loop
+    async def before_expiration_worker(self):
+        await self.bot.wait_until_ready()
+
+    async def require_reason(self, ctx, reason: str) -> bool:
+        if self.bot.db.settings(ctx.guild.id).get('require_reason', 1) and not reason.strip():
+            await ctx.send('❌ A reason is required for this punishment.', ephemeral=bool(ctx.interaction))
+            return False
+        return True
+
+    async def finish_silent(self, ctx, text: str):
+        if ctx.interaction:
+            await ctx.send(text, ephemeral=True)
+        elif ctx.message:
+            try:
+                await ctx.message.delete()
+            except discord.HTTPException:
+                pass
 
     async def record(self, ctx, action, target, reason, duration=None):
         case_id = self.bot.db.next_case(ctx.guild.id, action, target.id, ctx.author.id, reason, duration)
@@ -85,7 +139,9 @@ class Moderation(commands.Cog):
     @commands.hybrid_command(name='kick', description='Kick a member.')
     @app_commands.describe(member='Member to kick', reason='Reason')
     @permission_check()
-    async def kick(self, ctx, member: discord.Member, *, reason: str = 'No reason provided'):
+    async def kick(self, ctx, member: discord.Member, *, reason: str = ''):
+        if not await self.require_reason(ctx, reason):
+            return
         if not hierarchy_ok(ctx, member):
             return await ctx.send('❌ That member is above my role or your role.', ephemeral=bool(ctx.interaction))
         case_id = await self.record(ctx, 'kick', member, reason)
@@ -93,38 +149,52 @@ class Moderation(commands.Cog):
             await member.kick(reason=f'Case #{case_id} • {reason}')
         except discord.Forbidden:
             return await ctx.send('❌ Discord denied the kick. Check my Kick Members permission and role hierarchy.')
-        await ctx.send(f'👢 Kicked {member.mention} • Case **#{case_id}**.')
+        await self.finish_silent(ctx, f'👢 Kicked {member} • Case #{case_id}.')
 
     @commands.hybrid_command(name='ban', description='Ban a member.')
     @app_commands.describe(member='Member to ban', delete_days='Days of recent messages to delete', reason='Reason')
     @app_commands.rename(delete_days='delete_days')
     @permission_check()
-    async def ban(self, ctx, member: discord.Member, delete_days: app_commands.Range[int, 0, 7] = 0, *, reason: str = 'No reason provided'):
+    async def ban(self, ctx, member: discord.Member, *, details: str = ''):
+        reason, duration = split_reason_duration(details)
+        if not await self.require_reason(ctx, reason):
+            return
         if not hierarchy_ok(ctx, member):
             return await ctx.send('❌ That member is above my role or your role.', ephemeral=bool(ctx.interaction))
-        case_id = await self.record(ctx, 'ban', member, reason)
+        settings = self.bot.db.settings(ctx.guild.id)
+        delete_days = max(0, min(7, int(settings.get('ban_delete_days', 1))))
+        case_id = await self.record(ctx, 'ban', member, reason, duration)
         try:
-            await member.ban(reason=f'Case #{case_id} • {reason}', delete_message_seconds=int(delete_days) * 86400)
+            await member.ban(reason=f'Case #{case_id} • {reason}', delete_message_seconds=delete_days * 86400)
         except discord.Forbidden:
-            return await ctx.send('❌ Discord denied the ban. Check my Ban Members permission and role hierarchy.')
-        await ctx.send(f'🔨 Banned {member.mention} • Case **#{case_id}**.')
+            return await ctx.send('❌ Discord denied the ban. Check my Ban Members permission and role hierarchy.', ephemeral=bool(ctx.interaction))
+        if duration:
+            self.bot.db.add_temp_punishment(ctx.guild.id, member.id, 'ban', case_id, datetime.now(timezone.utc) + duration)
+        status = f'for {duration_text(duration)}' if duration else 'permanently'
+        await self.finish_silent(ctx, f'🔨 Banned {member} {status} • Case #{case_id}.')
 
     @commands.hybrid_command(name='softban', description='Ban and immediately unban a member to remove recent messages.')
     @permission_check()
-    async def softban(self, ctx, member: discord.Member, delete_days: app_commands.Range[int, 0, 7] = 1, *, reason: str = 'No reason provided'):
+    async def softban(self, ctx, member: discord.Member, *, reason: str = ''):
+        if not await self.require_reason(ctx, reason):
+            return
         if not hierarchy_ok(ctx, member):
             return await ctx.send('❌ That member is above my role or your role.', ephemeral=bool(ctx.interaction))
+        settings = self.bot.db.settings(ctx.guild.id)
+        delete_days = max(0, min(7, int(settings.get('softban_delete_days', 1))))
         case_id = await self.record(ctx, 'softban', member, reason)
         try:
-            await member.ban(reason=f'Softban Case #{case_id} • {reason}', delete_message_seconds=int(delete_days) * 86400)
+            await member.ban(reason=f'Softban Case #{case_id} • {reason}', delete_message_seconds=delete_days * 86400)
             await ctx.guild.unban(discord.Object(member.id), reason=f'Softban Case #{case_id}')
         except discord.Forbidden:
-            return await ctx.send('❌ Discord denied the softban. Check Ban Members permission.')
-        await ctx.send(f'🧹 Softbanned {member.mention} • Case **#{case_id}**.')
+            return await ctx.send('❌ Discord denied the softban. Check Ban Members permission.', ephemeral=bool(ctx.interaction))
+        await self.finish_silent(ctx, f'🧹 Softbanned {member} • Case #{case_id}.')
 
     @commands.hybrid_command(name='unban', description='Unban a user by ID or resolved user.')
     @permission_check()
-    async def unban(self, ctx, user: discord.User, *, reason: str = 'No reason provided'):
+    async def unban(self, ctx, user: discord.User, *, reason: str = ''):
+        if not await self.require_reason(ctx, reason):
+            return
         case_id = await self.record(ctx, 'unban', user, reason)
         try:
             await ctx.guild.unban(user, reason=f'Case #{case_id} • {reason}')
@@ -132,13 +202,19 @@ class Moderation(commands.Cog):
             return await ctx.send('❌ That user is not banned.')
         except discord.Forbidden:
             return await ctx.send('❌ Discord denied the unban.')
-        await ctx.send(f'🔓 Unbanned **{user}** • Case **#{case_id}**.')
+        await self.finish_silent(ctx, f'🔓 Unbanned {user} • Case #{case_id}.')
 
     async def do_timeout(self, ctx, member, duration_value, reason, action='mute'):
+        reason, parsed = split_reason_duration(f'{reason} {duration_value}'.strip())
+        delta = parsed
+        if not delta:
+            await ctx.send('❌ A timeout duration is required at the end, like spam 1d.', ephemeral=bool(ctx.interaction))
+            return
+        if not await self.require_reason(ctx, reason):
+            return
         if not hierarchy_ok(ctx, member):
             await ctx.send('❌ That member is above my role or your role.', ephemeral=bool(ctx.interaction))
             return
-        delta = parse_duration(duration_value)
         if not delta or delta.total_seconds() > 28 * 86400:
             await ctx.send('❌ Duration must be between 1s and 28d, like `10m`, `2h`, or `7d`.', ephemeral=bool(ctx.interaction))
             return
@@ -147,21 +223,25 @@ class Moderation(commands.Cog):
             await member.timeout(delta, reason=f'Case #{case_id} • {reason}')
         except discord.Forbidden:
             return await ctx.send('❌ Discord denied the timeout. Check Moderate Members permission and role hierarchy.')
-        await ctx.send(f'🔇 Timed out {member.mention} for **{duration_text(delta)}** • Case **#{case_id}**.')
+        await self.finish_silent(ctx, f'🔇 Timed out {member} for {duration_text(delta)} • Case #{case_id}.')
 
     @commands.hybrid_command(name='mute', description='Timeout a member.')
     @permission_check()
-    async def mute(self, ctx, member: discord.Member, duration: str = '10m', *, reason: str = 'No reason provided'):
-        await self.do_timeout(ctx, member, duration, reason, 'mute')
+    async def mute(self, ctx, member: discord.Member, *, details: str = ''):
+        reason, duration = split_reason_duration(details)
+        await self.do_timeout(ctx, member, duration or '', reason, 'mute')
 
     @commands.hybrid_command(name='timeout', description='Timeout a member.')
     @permission_check()
-    async def timeout(self, ctx, member: discord.Member, duration: str = '10m', *, reason: str = 'No reason provided'):
-        await self.do_timeout(ctx, member, duration, reason, 'timeout')
+    async def timeout(self, ctx, member: discord.Member, *, details: str = ''):
+        reason, duration = split_reason_duration(details)
+        await self.do_timeout(ctx, member, duration or '', reason, 'timeout')
 
     @commands.hybrid_command(name='unmute', description='Remove a member timeout.')
     @permission_check()
-    async def unmute(self, ctx, member: discord.Member, *, reason: str = 'No reason provided'):
+    async def unmute(self, ctx, member: discord.Member, *, reason: str = ''):
+        if not await self.require_reason(ctx, reason):
+            return
         if not hierarchy_ok(ctx, member):
             return await ctx.send('❌ That member is above my role or your role.', ephemeral=bool(ctx.interaction))
         case_id = await self.record(ctx, 'unmute', member, reason)
@@ -169,7 +249,7 @@ class Moderation(commands.Cog):
             await member.timeout(None, reason=f'Case #{case_id} • {reason}')
         except discord.Forbidden:
             return await ctx.send('❌ Discord denied removing the timeout.')
-        await ctx.send(f'🔊 Removed timeout from {member.mention} • Case **#{case_id}**.')
+        await self.finish_silent(ctx, f'🔊 Removed timeout from {member} • Case #{case_id}.')
 
     @commands.hybrid_command(name='purge', description='Delete recent messages.')
     @app_commands.describe(amount='Number of messages to delete, up to 100')
