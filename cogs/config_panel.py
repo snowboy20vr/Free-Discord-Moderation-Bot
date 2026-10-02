@@ -7,6 +7,7 @@ from discord import app_commands
 from utils.permissions import can_use, default_level, LEVEL_NAMES, DEFAULT_LEVELS
 
 COMMANDS = sorted(DEFAULT_LEVELS)
+COMMAND_PAGES = [COMMANDS[:25], COMMANDS[25:]]
 
 class LevelSelect(discord.ui.Select):
     def __init__(self, parent_view):
@@ -21,19 +22,60 @@ class LevelSelect(discord.ui.Select):
         level = int(self.values[0])
         self.parent_view.bot.db.set_command_level(interaction.guild.id, command, level)
         self.parent_view.selected_level = level
-        self.parent_view.refresh_text()
+        self.parent_view.rebuild()
         await interaction.response.edit_message(view=self.parent_view)
 
 class CommandSelect(discord.ui.Select):
     def __init__(self, parent_view):
         self.parent_view = parent_view
-        options = [discord.SelectOption(label=f'/{name}', description=f'Default level {default_level(name)}', value=name) for name in COMMANDS[:25]]
-        super().__init__(placeholder='Choose a command to configure', min_values=1, max_values=1, options=options, custom_id='config_command_select')
+        page = parent_view.command_page
+        commands_on_page = COMMAND_PAGES[page]
+        options = [
+            discord.SelectOption(
+                label=f'/{name}',
+                description=f'Current: Level {parent_view.bot.db.get_command_level(parent_view.guild.id, name, default_level(name))}',
+                value=name,
+                default=name == parent_view.selected_command
+            )
+            for name in commands_on_page
+        ]
+        super().__init__(
+            placeholder=f'Choose a command (page {page + 1}/{len(COMMAND_PAGES)})',
+            min_values=1,
+            max_values=1,
+            options=options,
+            custom_id=f'config_command_select_{page}'
+        )
 
     async def callback(self, interaction: discord.Interaction):
         self.parent_view.selected_command = self.values[0]
         self.parent_view.selected_level = self.parent_view.bot.db.get_command_level(interaction.guild.id, self.values[0], default_level(self.values[0]))
-        self.parent_view.refresh_text()
+        self.parent_view.rebuild()
+        await interaction.response.edit_message(view=self.parent_view)
+
+class CommandPageSelect(discord.ui.Select):
+    def __init__(self, parent_view):
+        self.parent_view = parent_view
+        options = [
+            discord.SelectOption(
+                label=f'Command page {i + 1}',
+                description=f'{len(page)} commands',
+                value=str(i),
+                default=i == parent_view.command_page
+            )
+            for i, page in enumerate(COMMAND_PAGES)
+        ]
+        super().__init__(
+            placeholder='Choose a command page',
+            min_values=1,
+            max_values=1,
+            options=options,
+            custom_id='config_command_page_select'
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+        self.parent_view.command_page = int(self.values[0])
+        self.parent_view.rebuild()
         await interaction.response.edit_message(view=self.parent_view)
 
 class ConfigTab(discord.ui.Button):
@@ -56,6 +98,7 @@ class ConfigView(discord.ui.LayoutView):
         self.tab = 'overview'
         self.selected_command = None
         self.selected_level = None
+        self.command_page = 0
         self.rebuild()
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
@@ -64,15 +107,15 @@ class ConfigView(discord.ui.LayoutView):
             return False
         return True
 
-    def refresh_text(self):
-        self.clear_items()
-        self.rebuild()
-
     def rebuild(self):
         self.clear_items()
         settings = self.bot.db.settings(self.guild.id)
-        header = discord.ui.TextDisplay(f'# 🛡️ Server Control Center\n**{self.guild.name}**\n\nConfigure moderation without leaving Discord.')
-        self.add_item(header)
+
+        self.add_item(discord.ui.TextDisplay(
+            f'# 🛡️ Server Control Center\n**{self.guild.name}**\n\n'
+            'Configure moderation, permissions and server behavior without leaving Discord.'
+        ))
+
         tabs = discord.ui.ActionRow()
         tabs.add_item(ConfigTab(self, 'overview', 'Overview', '🏠'))
         tabs.add_item(ConfigTab(self, 'commands', 'Command Permissions', '🛡️'))
@@ -80,38 +123,62 @@ class ConfigView(discord.ui.LayoutView):
         tabs.add_item(ConfigTab(self, 'roles', 'Role Levels', '🎖️'))
         self.add_item(tabs)
         self.add_item(discord.ui.Separator())
+
+        log_channel = f'<#{settings["log_channel_id"]}>' if settings['log_channel_id'] else 'Not configured'
+        mute_role = f'<@&{settings["mute_role_id"]}>' if settings['mute_role_id'] else 'Discord timeout mode'
+        dm_status = 'Enabled' if settings['dm_actions'] else 'Disabled'
+
         if self.tab == 'overview':
-            text = f'## Overview\n**Prefix:** `{settings["prefix"]}`\n**Log channel:** {f"<#{settings["log_channel_id"]}>" if settings["log_channel_id"] else "Not configured"}\n**Mute role:** {f"<@&{settings["mute_role_id"]}>" if settings["mute_role_id"] else "Discord timeout mode"}\n**DM actions:** {"Enabled" if settings["dm_actions"] else "Disabled"}\n\nUse the tabs above to configure the server.'
-            self.add_item(discord.ui.TextDisplay(text))
+            self.add_item(discord.ui.TextDisplay(
+                f'## Overview\n'
+                f'Prefix: {settings["prefix"]}\n'
+                f'Log channel: {log_channel}\n'
+                f'Mute role: {mute_role}\n'
+                f'Moderation DMs: {dm_status}\n\n'
+                'Use the tabs above to configure the server.'
+            ))
         elif self.tab == 'commands':
-            self.add_item(discord.ui.TextDisplay(f'## Command Permissions\nSelected: **/{self.selected_command or "None"}**\nLevel: **{self.selected_level or "—"}**\n\nLevels: 1 Trial Mod • 2 Mod • 3 Senior Mod • 4 Admin • 5 Owner'))
-            row1 = discord.ui.ActionRow()
-            row1.add_item(CommandSelect(self))
-            self.add_item(row1)
-            row2 = discord.ui.ActionRow()
-            row2.add_item(LevelSelect(self))
-            self.add_item(row2)
+            selected = self.selected_command or 'None'
+            level = self.selected_level or '—'
+            self.add_item(discord.ui.TextDisplay(
+                f'## Command Permissions\n'
+                f'Selected: /{selected}\n'
+                f'Required level: {level}\n\n'
+                '1 • Trial Moderator\n'
+                '2 • Moderator\n'
+                '3 • Senior Moderator\n'
+                '4 • Administrator\n'
+                '5 • Owner'
+            ))
+            page_row = discord.ui.ActionRow()
+            page_row.add_item(CommandPageSelect(self))
+            self.add_item(page_row)
+            command_row = discord.ui.ActionRow()
+            command_row.add_item(CommandSelect(self))
+            self.add_item(command_row)
+            level_row = discord.ui.ActionRow()
+            level_row.add_item(LevelSelect(self))
+            self.add_item(level_row)
         elif self.tab == 'server':
-            self.add_item(discord.ui.TextDisplay('## Server Settings\nUse /setprefix, /setlogchannel and /setmuterole for the server settings.\n\nThese values are stored permanently in SQLite.'))
+            self.add_item(discord.ui.TextDisplay(
+                '## Server Settings\n\n'
+                'Use /setprefix to change the prefix.\n'
+                'Use /setlogchannel to choose the moderation log channel.\n'
+                'Use /setmuterole to configure a legacy mute role.\n\n'
+                'Settings are stored permanently in SQLite.'
+            ))
         else:
             roles = self.bot.db.role_levels(self.guild.id)
             lines = ['## Role Permission Levels']
-            for role_id, level in roles.items():
-                role = self.guild.get_role(role_id)
-                if role:
-                    lines.append(f'{role.mention} → **Level {level}** ({LEVEL_NAMES[level]})')
+            if not roles:
+                lines.append('No custom role levels are configured yet.')
+            else:
+                for role_id, level in roles.items():
+                    role = self.guild.get_role(role_id)
+                    if role:
+                        lines.append(f'{role.mention} → Level {level} ({LEVEL_NAMES[level]})')
             lines.append('\nUse /setrolelevel to assign a role a level.')
             self.add_item(discord.ui.TextDisplay('\n'.join(lines)))
-        if self.tab == 'commands':
-            save = discord.ui.Button(label='Refresh', emoji='🔄', style=discord.ButtonStyle.primary, custom_id='config_refresh')
-            async def callback(interaction):
-                self.rebuild()
-                await interaction.response.edit_message(view=self)
-            save.callback = callback
-            row = discord.ui.ActionRow()
-            row.add_item(save)
-            self.add_item(row)
-
 
 def config_check():
     async def predicate(ctx: commands.Context):
@@ -142,15 +209,15 @@ class ConfigCog(commands.Cog):
     async def setpermissionlevel(self, ctx, command: str, level: app_commands.Range[int, 1, 5]):
         command = command.lower().lstrip('/')
         if command not in COMMANDS and not self.bot.get_command(command):
-            return await ctx.send(f'❌ Unknown command `{command}`.', ephemeral=bool(ctx.interaction))
+            return await ctx.send(f'❌ Unknown command {command}.', ephemeral=bool(ctx.interaction))
         self.bot.db.set_command_level(ctx.guild.id, command, int(level))
-        await ctx.send(f'✅ `/{command}` now requires **Level {level} — {LEVEL_NAMES[int(level)]}**.')
+        await ctx.send(f'✅ /{command} now requires Level {level} — {LEVEL_NAMES[int(level)]}.')
 
     @commands.hybrid_command(name='setrolelevel', description='Give a role a moderation permission level.')
     @config_check()
     async def setrolelevel(self, ctx, role: discord.Role, level: app_commands.Range[int, 1, 5]):
         self.bot.db.set_role_level(ctx.guild.id, role.id, int(level))
-        await ctx.send(f'✅ {role.mention} is now **Level {level} — {LEVEL_NAMES[int(level)]}**.')
+        await ctx.send(f'✅ {role.mention} is now Level {level} — {LEVEL_NAMES[int(level)]}.')
 
     @commands.hybrid_command(name='setprefix', description='Change the server prefix.')
     @config_check()
@@ -158,7 +225,7 @@ class ConfigCog(commands.Cog):
         if len(prefix) > 5 or any(ch.isspace() for ch in prefix):
             return await ctx.send('❌ Prefix must be 1-5 non-space characters.', ephemeral=bool(ctx.interaction))
         self.bot.db.set_setting(ctx.guild.id, 'prefix', prefix)
-        await ctx.send(f'✅ Prefix changed to `{prefix}`. Example: `{prefix}warn @user reason`')
+        await ctx.send(f'✅ Prefix changed to {prefix}. Example: {prefix}warn @user reason')
 
     @commands.hybrid_command(name='setlogchannel', description='Set or clear the moderation log channel.')
     @config_check()
@@ -166,7 +233,7 @@ class ConfigCog(commands.Cog):
         self.bot.db.set_setting(ctx.guild.id, 'log_channel_id', channel.id if channel else None)
         await ctx.send(f'✅ Moderation logs: {channel.mention if channel else "disabled"}.')
 
-    @commands.hybrid_command(name='setmuterole', description='Set the legacy mute role. Timeout remains the default mute system.')
+    @commands.hybrid_command(name='setmuterole', description='Set the legacy mute role.')
     @config_check()
     async def setmuterole(self, ctx, role: discord.Role | None = None):
         self.bot.db.set_setting(ctx.guild.id, 'mute_role_id', role.id if role else None)
