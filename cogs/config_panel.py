@@ -160,6 +160,15 @@ class ConfigView(discord.ui.LayoutView):
             level_row = discord.ui.ActionRow()
             level_row.add_item(LevelSelect(self))
             self.add_item(level_row)
+        elif self.tab == 'settings':
+            self.add_item(discord.ui.TextDisplay(
+                '## Settings\n\n'
+                'Server-wide moderation behavior can be configured here.\n'
+                'Reasons, direct-message notices, and recent-message cleanup are supported.\n\n'
+                'Temporary ban: .ban 123456789 spam 1d\n'
+                'Permanent ban: .ban 123456789 spam\n'
+                'Temporary mute: .mute 123456789 spam 1d'
+            ))
         elif self.tab == 'server':
             self.add_item(discord.ui.TextDisplay(
                 '## Server Settings\n\n'
