@@ -109,7 +109,9 @@ class Moderation(commands.Cog):
     @commands.hybrid_command(name='warn', description='Warn a member and create a case.')
     @app_commands.describe(member='Member to warn', reason='Reason for the warning')
     @permission_check()
-    async def warn(self, ctx, member: discord.Member, *, reason: str = 'No reason provided'):
+    async def warn(self, ctx, member: discord.Member, *, reason: str = ''):
+        if not await self.require_reason(ctx, reason):
+            return
         if not hierarchy_ok(ctx, member):
             return await ctx.send('❌ You cannot warn that member because of role hierarchy.', ephemeral=bool(ctx.interaction))
         warning_id = self.bot.db.add_warning(ctx.guild.id, member.id, ctx.author.id, reason)
@@ -152,8 +154,7 @@ class Moderation(commands.Cog):
         await self.finish_silent(ctx, f'👢 Kicked {member} • Case #{case_id}.')
 
     @commands.hybrid_command(name='ban', description='Ban a member.')
-    @app_commands.describe(member='Member to ban', delete_days='Days of recent messages to delete', reason='Reason')
-    @app_commands.rename(delete_days='delete_days')
+    @app_commands.describe(member='Member to ban', details='Reason, optionally ending with a duration such as 1d')
     @permission_check()
     async def ban(self, ctx, member: discord.Member, *, details: str = ''):
         reason, duration = split_reason_duration(details)
@@ -205,8 +206,10 @@ class Moderation(commands.Cog):
         await self.finish_silent(ctx, f'🔓 Unbanned {user} • Case #{case_id}.')
 
     async def do_timeout(self, ctx, member, duration_value, reason, action='mute'):
-        reason, parsed = split_reason_duration(f'{reason} {duration_value}'.strip())
-        delta = parsed
+        if isinstance(duration_value, timedelta):
+            delta = duration_value
+        else:
+            reason, delta = split_reason_duration(f'{reason} {duration_value}'.strip())
         if not delta:
             await ctx.send('❌ A timeout duration is required at the end, like spam 1d.', ephemeral=bool(ctx.interaction))
             return
