@@ -120,6 +120,7 @@ class ConfigView(discord.ui.LayoutView):
         tabs.add_item(ConfigTab(self, 'overview', 'Overview', '🏠'))
         tabs.add_item(ConfigTab(self, 'commands', 'Command Permissions', '🛡️'))
         tabs.add_item(ConfigTab(self, 'server', 'Server', '⚙️'))
+        tabs.add_item(ConfigTab(self, 'settings', 'Settings', '🛠️'))
         tabs.add_item(ConfigTab(self, 'roles', 'Role Levels', '🎖️'))
         self.add_item(tabs)
         self.add_item(discord.ui.Separator())
