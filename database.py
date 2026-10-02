@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import sqlite3
 from datetime import datetime, timezone
+from datetime import datetime, timezone
 from typing import Any
 
 from config import DATABASE_PATH, PREFIX
@@ -29,7 +30,10 @@ class Database:
             prefix TEXT NOT NULL DEFAULT '!',
             log_channel_id INTEGER,
             mute_role_id INTEGER,
-            dm_actions INTEGER NOT NULL DEFAULT 1,
+            dm_actions INTEGER NOT NULL DEFAULT 0,
+            require_reason INTEGER NOT NULL DEFAULT 1,
+            ban_delete_days INTEGER NOT NULL DEFAULT 1,
+            softban_delete_days INTEGER NOT NULL DEFAULT 1,
             case_counter INTEGER NOT NULL DEFAULT 0,
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL
@@ -45,6 +49,14 @@ class Database:
             command_name TEXT NOT NULL,
             level INTEGER NOT NULL CHECK(level BETWEEN 1 AND 5),
             PRIMARY KEY(guild_id, command_name)
+        );
+        CREATE TABLE IF NOT EXISTS temp_punishments (
+            guild_id INTEGER NOT NULL,
+            user_id INTEGER NOT NULL,
+            action TEXT NOT NULL,
+            case_id INTEGER NOT NULL,
+            expires_at TEXT NOT NULL,
+            PRIMARY KEY(guild_id, user_id, action)
         );
         CREATE TABLE IF NOT EXISTS cases (
             guild_id INTEGER NOT NULL,
@@ -68,7 +80,19 @@ class Database:
             PRIMARY KEY(guild_id, warning_id)
         );
         ''')
+        self._migrate_columns()
         self.conn.commit()
+
+    def _migrate_columns(self) -> None:
+        columns = {row["name"] for row in self.conn.execute("PRAGMA table_info(guild_settings)").fetchall()}
+        migrations = {
+            "require_reason": "ALTER TABLE guild_settings ADD COLUMN require_reason INTEGER NOT NULL DEFAULT 1",
+            "ban_delete_days": "ALTER TABLE guild_settings ADD COLUMN ban_delete_days INTEGER NOT NULL DEFAULT 1",
+            "softban_delete_days": "ALTER TABLE guild_settings ADD COLUMN softban_delete_days INTEGER NOT NULL DEFAULT 1",
+        }
+        for name, sql in migrations.items():
+            if name not in columns:
+                self.conn.execute(sql)
 
     def ensure_guild(self, guild_id: int) -> None:
         timestamp = now_iso()
@@ -81,7 +105,7 @@ class Database:
         return dict(row)
 
     def set_setting(self, guild_id: int, key: str, value: Any) -> None:
-        allowed = {'prefix', 'log_channel_id', 'mute_role_id', 'dm_actions'}
+        allowed = {'prefix', 'log_channel_id', 'mute_role_id', 'dm_actions', 'require_reason', 'ban_delete_days', 'softban_delete_days'}
         if key not in allowed:
             raise ValueError('Invalid setting')
         self.ensure_guild(guild_id)
@@ -138,3 +162,23 @@ class Database:
         cursor = self.conn.execute('UPDATE warnings SET active = 0 WHERE guild_id = ? AND user_id = ? AND active = 1', (guild_id, user_id))
         self.conn.commit()
         return cursor.rowcount
+
+
+    def add_temp_punishment(self, guild_id: int, user_id: int, action: str, case_id: int, expires_at: datetime) -> None:
+        self.conn.execute(
+            "INSERT INTO temp_punishments (guild_id, user_id, action, case_id, expires_at) VALUES (?, ?, ?, ?, ?) "
+            "ON CONFLICT(guild_id, user_id, action) DO UPDATE SET case_id = excluded.case_id, expires_at = excluded.expires_at",
+            (guild_id, user_id, action, case_id, expires_at.astimezone(timezone.utc).isoformat()),
+        )
+        self.conn.commit()
+
+    def due_temp_punishments(self) -> list[dict[str, Any]]:
+        rows = self.conn.execute("SELECT * FROM temp_punishments WHERE expires_at <= ?", (now_iso(),)).fetchall()
+        return [dict(row) for row in rows]
+
+    def remove_temp_punishment(self, guild_id: int, user_id: int, action: str) -> None:
+        self.conn.execute(
+            "DELETE FROM temp_punishments WHERE guild_id = ? AND user_id = ? AND action = ?",
+            (guild_id, user_id, action),
+        )
+        self.conn.commit()
