@@ -190,6 +190,10 @@ class ConfigView(discord.ui.LayoutView):
                 'Permanent ban: .ban 123456789 spam\n'
                 'Temporary mute: .mute 123456789 spam 1d'
             ))
+            settings_row = discord.ui.ActionRow()
+            settings_row.add_item(SettingsToggle(self, 'require_reason', 'Require Reasons', bool(settings.get('require_reason', 1))))
+            settings_row.add_item(SettingsToggle(self, 'dm_actions', 'Moderation DMs', bool(settings.get('dm_actions', 0))))
+            self.add_item(settings_row)
         elif self.tab == 'server':
             self.add_item(discord.ui.TextDisplay(
                 '## Server Settings\n\n'
