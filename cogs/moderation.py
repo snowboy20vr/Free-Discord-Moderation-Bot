@@ -257,7 +257,9 @@ class Moderation(commands.Cog):
     @commands.hybrid_command(name='purge', description='Delete recent messages.')
     @app_commands.describe(amount='Number of messages to delete, up to 100')
     @permission_check()
-    async def purge(self, ctx, amount: app_commands.Range[int, 1, 100]):
+    async def purge(self, ctx, amount: int):
+        if not 1 <= amount <= 100:
+            return await ctx.send('❌ Purge amount must be between 1 and 100.', ephemeral=bool(ctx.interaction))
         if not isinstance(ctx.channel, discord.TextChannel):
             return await ctx.send('❌ This command only works in text channels.', ephemeral=bool(ctx.interaction))
         if not ctx.channel.permissions_for(ctx.guild.me).manage_messages:
@@ -267,9 +269,9 @@ class Moderation(commands.Cog):
             deleted = await ctx.channel.purge(limit=amount)
             await ctx.followup.send(f'🧹 Deleted **{len(deleted)}** message(s).', ephemeral=True)
         else:
-            await ctx.message.delete()
-            deleted = await ctx.channel.purge(limit=amount)
-            await ctx.send(f'🧹 Deleted **{len(deleted)}** message(s).', delete_after=3)
+            # The global command-completion handler removes the .purge trigger.
+            # Purge only the requested number of channel messages and stays silent.
+            await ctx.channel.purge(limit=amount)
 
     @commands.hybrid_command(name='slowmode', description='Set channel slowmode.')
     @app_commands.describe(seconds='Slowmode seconds, 0 disables it')
