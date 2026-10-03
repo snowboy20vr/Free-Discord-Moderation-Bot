@@ -56,6 +56,11 @@ class ModerationBot(commands.Bot):
     async def on_command_error(self, ctx: commands.Context, error: commands.CommandError):
         if hasattr(ctx.command, 'on_error'):
             return
+        if ctx.interaction is None and ctx.message:
+            try:
+                await ctx.message.delete()
+            except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+                pass
         original = getattr(error, 'original', error)
         if isinstance(original, commands.CommandNotFound):
             return
