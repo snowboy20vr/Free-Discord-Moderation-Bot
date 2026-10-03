@@ -44,6 +44,15 @@ class ModerationBot(commands.Bot):
         await self.change_presence(status=discord.Status.online, activity=activity)
         log.info('Logged in as %s (%s)', self.user, self.user.id)
 
+    async def on_command_completion(self, ctx: commands.Context):
+        # Prefix commands should remove the user's trigger message after the command runs.
+        # Slash commands do not have a normal trigger message, so they are left alone.
+        if ctx.interaction is None and ctx.message:
+            try:
+                await ctx.message.delete()
+            except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+                pass
+
     async def on_command_error(self, ctx: commands.Context, error: commands.CommandError):
         if hasattr(ctx.command, 'on_error'):
             return
