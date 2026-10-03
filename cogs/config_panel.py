@@ -12,7 +12,7 @@ COMMAND_PAGES = [COMMANDS[:25], COMMANDS[25:]]
 class LevelSelect(discord.ui.Select):
     def __init__(self, parent_view):
         self.parent_view = parent_view
-        options = [discord.SelectOption(label=f'Level {i}', description=LEVEL_NAMES[i], value=str(i)) for i in range(1, 6)]
+        options = [discord.SelectOption(label=f'Level {i}', description=level_names[i], value=str(i)) for i in range(1, 6)]
         super().__init__(placeholder='Set the selected command to level 1-5', min_values=1, max_values=1, options=options, custom_id='config_level_select')
 
     async def callback(self, interaction: discord.Interaction):
@@ -90,8 +90,8 @@ class ConfigTab(discord.ui.Button):
         await interaction.response.edit_message(view=self.parent_view)
 
 class SettingsToggle(discord.ui.Button):
-    def __init__(self, parent, key, label, enabled):
-        self.parent = parent
+    def __init__(self, parent_view, key, label, enabled):
+        self.parent_view = parent_view
         self.key = key
         super().__init__(
             label=f'{label}: {"ON" if enabled else "OFF"}',
@@ -100,21 +100,21 @@ class SettingsToggle(discord.ui.Button):
         )
 
     async def callback(self, interaction: discord.Interaction):
-        settings = self.parent.bot.db.settings(self.parent.guild.id)
+        settings = self.parent_view.bot.db.settings(self.parent_view.guild.id)
         self.parent.bot.db.set_setting(
             self.parent.guild.id,
             self.key,
             0 if settings.get(self.key, 0) else 1,
         )
-        self.parent.rebuild()
-        await interaction.response.edit_message(view=self.parent)
+        self.parent_view.rebuild()
+        await interaction.response.edit_message(view=self.parent_view)
 
 
 class DeleteDaysSelect(discord.ui.Select):
-    def __init__(self, parent, key, placeholder):
-        self.parent = parent
+    def __init__(self, parent_view, key, placeholder):
+        self.parent_view = parent_view
         self.key = key
-        current = int(parent.bot.db.settings(parent.guild.id).get(key, 1))
+        current = int(parent_view.bot.db.settings(parent_view.guild.id).get(key, 1))
         super().__init__(
             placeholder=placeholder,
             min_values=1,
@@ -141,6 +141,45 @@ class DeleteDaysSelect(discord.ui.Select):
         await interaction.response.edit_message(view=self.parent)
 
 
+class LevelNameModal(discord.ui.Modal):
+    def __init__(self, parent_view, level: int, current_name: str):
+        self.parent_view = parent_view
+        self.level = level
+        super().__init__(title=f'Edit Level {level} Name')
+        self.name_input = discord.ui.TextInput(
+            label=f'Level {level} name',
+            placeholder='Example: Senior Moderator',
+            default=current_name,
+            min_length=1,
+            max_length=40,
+            required=True,
+        )
+        self.add_item(self.name_input)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        try:
+            self.parent_view.bot.db.set_level_name(self.parent_view.guild.id, self.level, str(self.name_input.value))
+        except ValueError as exc:
+            return await interaction.response.send_message(f'❌ {exc}', ephemeral=True)
+        self.parent_view.rebuild()
+        await interaction.response.edit_message(view=self.parent_view)
+
+
+class LevelNameButton(discord.ui.Button):
+    def __init__(self, parent_view, level: int, name: str):
+        self.parent_view = parent_view
+        self.level = level
+        super().__init__(
+            label=f'{level}: {name}'[:80],
+            style=discord.ButtonStyle.secondary,
+            custom_id=f'config_level_name_{level}',
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+        names = self.parent_view.bot.db.level_names(self.parent_view.guild.id)
+        await interaction.response.send_modal(LevelNameModal(self.parent_view, self.level, names[self.level]))
+
+
 class ConfigView(discord.ui.LayoutView):
     def __init__(self, bot, guild, author):
         super().__init__(timeout=300)
@@ -162,6 +201,7 @@ class ConfigView(discord.ui.LayoutView):
     def rebuild(self):
         self.clear_items()
         settings = self.bot.db.settings(self.guild.id)
+        level_names = self.bot.db.level_names(self.guild.id)
 
         self.add_item(discord.ui.TextDisplay(
             f'# 🛡️ Server Control Center\n**{self.guild.name}**\n\n'
@@ -241,7 +281,9 @@ class ConfigView(discord.ui.LayoutView):
             ))
         else:
             roles = self.bot.db.role_levels(self.guild.id)
-            lines = ['## Role Permission Levels']
+            lines = ['## Role Permission Levels', 'Customize the names below, then assign roles to levels with /setrolelevel.']
+            for i in range(1, 6):
+                lines.append(f'**Level {i}:** {level_names[i]}')
             if not roles:
                 lines.append('No custom role levels are configured yet.')
             else:
@@ -278,18 +320,24 @@ class ConfigCog(commands.Cog):
     @commands.hybrid_command(name='setpermissionlevel', description='Set the required level for a command.')
     @app_commands.describe(command='Command name without the slash', level='Required level from 1 to 5')
     @config_check()
-    async def setpermissionlevel(self, ctx, command: str, level: app_commands.Range[int, 1, 5]):
+    async def setpermissionlevel(self, ctx, command: str, level: int):
+        if not 1 <= level <= 5:
+            return await ctx.send('❌ Level must be between 1 and 5.', ephemeral=bool(ctx.interaction))
         command = command.lower().lstrip('/')
         if command not in COMMANDS and not self.bot.get_command(command):
             return await ctx.send(f'❌ Unknown command {command}.', ephemeral=bool(ctx.interaction))
         self.bot.db.set_command_level(ctx.guild.id, command, int(level))
-        await ctx.send(f'✅ /{command} now requires Level {level} — {LEVEL_NAMES[int(level)]}.')
+        names = self.bot.db.level_names(ctx.guild.id)
+        await ctx.send(f'✅ /{command} now requires Level {level} — {names[int(level)]}.')
 
     @commands.hybrid_command(name='setrolelevel', description='Give a role a moderation permission level.')
     @config_check()
-    async def setrolelevel(self, ctx, role: discord.Role, level: app_commands.Range[int, 1, 5]):
+    async def setrolelevel(self, ctx, role: discord.Role, level: int):
+        if not 1 <= level <= 5:
+            return await ctx.send('❌ Level must be between 1 and 5.', ephemeral=bool(ctx.interaction))
         self.bot.db.set_role_level(ctx.guild.id, role.id, int(level))
-        await ctx.send(f'✅ {role.mention} is now Level {level} — {LEVEL_NAMES[int(level)]}.')
+        names = self.bot.db.level_names(ctx.guild.id)
+        await ctx.send(f'✅ {role.mention} is now Level {level} — {names[int(level)]}.')
 
     @commands.hybrid_command(name='setprefix', description='Change the server prefix.')
     @config_check()
@@ -310,6 +358,18 @@ class ConfigCog(commands.Cog):
     async def setmuterole(self, ctx, role: discord.Role | None = None):
         self.bot.db.set_setting(ctx.guild.id, 'mute_role_id', role.id if role else None)
         await ctx.send(f'✅ Mute role: {role.mention if role else "not configured"}.')
+
+    @commands.hybrid_command(name='setlevelname', description='Set a custom name for a permission level.')
+    @app_commands.describe(level='Permission level from 1 to 5', name='Custom level name')
+    @config_check()
+    async def setlevelname(self, ctx, level: int, *, name: str):
+        if not 1 <= level <= 5:
+            return await ctx.send('❌ Level must be between 1 and 5.', ephemeral=bool(ctx.interaction))
+        try:
+            self.bot.db.set_level_name(ctx.guild.id, level, name)
+        except ValueError as exc:
+            return await ctx.send(f'❌ {exc}', ephemeral=bool(ctx.interaction))
+        await ctx.send(f'✅ Level {level} is now named **{name.strip()}**.')
 
 async def setup(bot):
     await bot.add_cog(ConfigCog(bot))
