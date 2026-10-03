@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import sqlite3
 from datetime import datetime, timezone
-from datetime import datetime, timezone
 from typing import Any
 
 from config import DATABASE_PATH, PREFIX
@@ -37,6 +36,12 @@ class Database:
             case_counter INTEGER NOT NULL DEFAULT 0,
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS level_names (
+            guild_id INTEGER NOT NULL,
+            level INTEGER NOT NULL CHECK(level BETWEEN 1 AND 5),
+            name TEXT NOT NULL,
+            PRIMARY KEY(guild_id, level)
         );
         CREATE TABLE IF NOT EXISTS role_levels (
             guild_id INTEGER NOT NULL,
@@ -126,6 +131,30 @@ class Database:
     def all_command_levels(self, guild_id: int) -> dict[str, int]:
         rows = self.conn.execute('SELECT command_name, level FROM command_levels WHERE guild_id = ?', (guild_id,)).fetchall()
         return {row['command_name']: int(row['level']) for row in rows}
+
+    def level_names(self, guild_id: int) -> dict[int, str]:
+        self.ensure_guild(guild_id)
+        defaults = {1: 'Owner / Full Control', 2: 'Administrator', 3: 'Senior Moderator', 4: 'Moderator', 5: 'Trial Moderator'}
+        rows = self.conn.execute('SELECT level, name FROM level_names WHERE guild_id = ?', (guild_id,)).fetchall()
+        names = defaults.copy()
+        names.update({int(row['level']): str(row['name']) for row in rows})
+        return names
+
+    def set_level_name(self, guild_id: int, level: int, name: str) -> None:
+        if not 1 <= level <= 5:
+            raise ValueError('Permission level must be 1-5')
+        name = ' '.join(name.strip().split())
+        if not name:
+            raise ValueError('Level name cannot be empty')
+        if len(name) > 40:
+            raise ValueError('Level name must be 40 characters or fewer')
+        self.ensure_guild(guild_id)
+        self.conn.execute(
+            'INSERT INTO level_names (guild_id, level, name) VALUES (?, ?, ?) '
+            'ON CONFLICT(guild_id, level) DO UPDATE SET name = excluded.name',
+            (guild_id, level, name),
+        )
+        self.conn.commit()
 
     def set_role_level(self, guild_id: int, role_id: int, level: int) -> None:
         if not 1 <= level <= 5:
