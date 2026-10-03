@@ -238,11 +238,7 @@ class ConfigView(discord.ui.LayoutView):
                 f'## Command Permissions\n'
                 f'Selected: /{selected}\n'
                 f'Required level: {level}\n\n'
-                '1 • Owner / Full Control\n'
-                '2 • Administrator\n'
-                '3 • Senior Moderator\n'
-                '4 • Moderator\n'
-                '5 • Trial Moderator'
+                '\n'.join(f'{i} • {level_names[i]}' for i in range(1, 6))
             ))
             page_row = discord.ui.ActionRow()
             page_row.add_item(CommandPageSelect(self))
