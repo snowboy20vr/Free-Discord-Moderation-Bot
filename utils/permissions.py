@@ -39,6 +39,7 @@ DEFAULT_LEVELS = {
     'setprefix': 1,
     'setlogchannel': 1,
     'setmuterole': 1,
+    'setlevelname': 1,
 }
 
 def highest_level(member: discord.Member, role_levels: dict[int, int]) -> int:
