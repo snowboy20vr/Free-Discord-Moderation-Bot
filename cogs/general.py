@@ -77,7 +77,8 @@ class General(commands.Cog):
         else:
             configured = [self.bot.db.role_levels(ctx.guild.id).get(r.id) for r in member.roles if self.bot.db.role_levels(ctx.guild.id).get(r.id) is not None]
             level = min(configured) if configured else 5
-        await ctx.send(f'🛡️ {member.mention} has permission level **{level} — {LEVEL_NAMES[level]}**.')
+        names = self.bot.db.level_names(ctx.guild.id)
+        await ctx.send(f'🛡️ {member.mention} has permission level **{level} — {names[level]}**.')
 
 async def setup(bot):
     await bot.add_cog(General(bot))
