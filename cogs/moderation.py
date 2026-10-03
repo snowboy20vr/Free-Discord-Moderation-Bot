@@ -269,8 +269,11 @@ class Moderation(commands.Cog):
             deleted = await ctx.channel.purge(limit=amount)
             await ctx.followup.send(f'🧹 Deleted **{len(deleted)}** message(s).', ephemeral=True)
         else:
-            # The global command-completion handler removes the .purge trigger.
-            # Purge only the requested number of channel messages and stays silent.
+            # Delete the trigger first so the requested amount is actual channel messages.
+            try:
+                await ctx.message.delete()
+            except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+                pass
             await ctx.channel.purge(limit=amount)
 
     @commands.hybrid_command(name='slowmode', description='Set channel slowmode.')
