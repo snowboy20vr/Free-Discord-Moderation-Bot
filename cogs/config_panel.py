@@ -12,6 +12,7 @@ COMMAND_PAGES = [COMMANDS[:25], COMMANDS[25:]]
 class LevelSelect(discord.ui.Select):
     def __init__(self, parent_view):
         self.parent_view = parent_view
+        level_names = parent_view.bot.db.level_names(parent_view.guild.id)
         options = [discord.SelectOption(label=f'Level {i}', description=level_names[i], value=str(i)) for i in range(1, 6)]
         super().__init__(placeholder='Set the selected command to level 1-5', min_values=1, max_values=1, options=options, custom_id='config_level_select')
 
@@ -101,8 +102,8 @@ class SettingsToggle(discord.ui.Button):
 
     async def callback(self, interaction: discord.Interaction):
         settings = self.parent_view.bot.db.settings(self.parent_view.guild.id)
-        self.parent.bot.db.set_setting(
-            self.parent.guild.id,
+        self.parent_view.bot.db.set_setting(
+            self.parent_view.guild.id,
             self.key,
             0 if settings.get(self.key, 0) else 1,
         )
@@ -132,13 +133,13 @@ class DeleteDaysSelect(discord.ui.Select):
         )
 
     async def callback(self, interaction: discord.Interaction):
-        self.parent.bot.db.set_setting(
-            self.parent.guild.id,
+        self.parent_view.bot.db.set_setting(
+            self.parent_view.guild.id,
             self.key,
             int(self.values[0]),
         )
-        self.parent.rebuild()
-        await interaction.response.edit_message(view=self.parent)
+        self.parent_view.rebuild()
+        await interaction.response.edit_message(view=self.parent_view)
 
 
 class LevelNameModal(discord.ui.Modal):
@@ -290,9 +291,14 @@ class ConfigView(discord.ui.LayoutView):
                 for role_id, level in roles.items():
                     role = self.guild.get_role(role_id)
                     if role:
-                        lines.append(f'{role.mention} → Level {level} ({LEVEL_NAMES[level]})')
+                        lines.append(f'{role.mention} → Level {level} ({level_names[level]})')
             lines.append('\nUse /setrolelevel to assign a role a level.')
+            lines.append('Use the buttons below to rename any level.')
             self.add_item(discord.ui.TextDisplay('\n'.join(lines)))
+            name_row = discord.ui.ActionRow()
+            for i in range(1, 6):
+                name_row.add_item(LevelNameButton(self, i, level_names[i]))
+            self.add_item(name_row)
 
 def config_check():
     async def predicate(ctx: commands.Context):
